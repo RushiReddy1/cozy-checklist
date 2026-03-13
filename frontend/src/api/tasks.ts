@@ -4,7 +4,7 @@ export type Task = {
   done: boolean;
 };
 
-const BASE_URL = "http://localhost:8080/tasks";
+const BASE_URL = "https://cozy-checklist.onrender.com/tasks";
 
 export async function fetchTasks() {
   const res = await fetch(BASE_URL);
