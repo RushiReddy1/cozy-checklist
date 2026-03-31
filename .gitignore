@@ -1,4 +1,6 @@
 backend/tasks.db
+backend/mini-todo-backend
 frontend/node_modules
 frontend/dist
+.gocache
 .DS_Store

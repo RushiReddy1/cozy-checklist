@@ -1,0 +1,16 @@
+<svg width="360" height="120" viewBox="0 0 360 120" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <circle cx="56" cy="58" r="26" fill="#E9D5FF"/>
+  <circle cx="48" cy="48" r="6" fill="white" fill-opacity="0.75"/>
+  <circle cx="66" cy="68" r="4" fill="white" fill-opacity="0.55"/>
+
+  <rect x="43" y="45" width="26" height="26" rx="13" fill="#F9A8D4"/>
+  <path d="M56 50.5C58.4 46.8 65 48.2 65 53.8C65 59.4 56 63.8 56 63.8C56 63.8 47 59.4 47 53.8C47 48.2 53.6 46.8 56 50.5Z" fill="white"/>
+
+  <text x="96" y="67"
+    fill="#EC4899"
+    font-size="36"
+    font-weight="700"
+    font-family="Nunito, Arial Rounded MT Bold, sans-serif">
+    Bubblydo
+  </text>
+</svg>
