@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
-import { ChevronLeft, ChevronRight } from "lucide-react";
+import { ChevronLeft, ChevronRight, LogOut } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import ChecklistCard from "../components/ChecklistCard";
 import CalendarPanel from "../components/CalendarPanel";
 import CuteDialog from "../components/CuteDialog";
@@ -20,6 +21,12 @@ import { fetchTasks } from "../api/tasks";
 import { deleteChecklist } from "../api/checklist";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import {
+  clearAuthSession,
+  getDisplayName,
+  getEntryKind,
+  getStoredUser,
+} from "@/lib/auth";
 
 // ✅ TYPE (what backend returns)
 type Checklist = {
@@ -48,6 +55,7 @@ type HomePageProps = {
 };
 
 export default function HomePage({ checklists, setChecklists }: HomePageProps) {
+  const navigate = useNavigate();
   const [input, setInput] = useState("");
   const [reminderInput, setReminderInput] = useState("");
   const [reminderDate, setReminderDate] = useState("");
@@ -72,6 +80,11 @@ export default function HomePage({ checklists, setChecklists }: HomePageProps) {
     () => new Date(today.getFullYear(), today.getMonth(), 1),
   );
   const currentMonth = viewedMonth;
+  const authUser = getStoredUser();
+  const welcomeName = getDisplayName(authUser);
+  const greeting = getEntryKind() === "signup"
+    ? `Welcome, ${welcomeName}`
+    : `Welcome back, ${welcomeName}`;
   const monthLabel = currentMonth.toLocaleDateString("en-US", {
     month: "long",
     year: "numeric",
@@ -90,11 +103,18 @@ export default function HomePage({ checklists, setChecklists }: HomePageProps) {
     return `${year}-${month}-${day}`;
   }
 
-  function getChecklistDateKey(dateValue?: string) {
+  function getStoredDateKey(dateValue?: string) {
     if (!dateValue) return "";
+    const matchedDate = dateValue.match(/^(\d{4}-\d{2}-\d{2})/);
+    if (matchedDate) return matchedDate[1];
+
     const parsedDate = new Date(dateValue);
     if (Number.isNaN(parsedDate.getTime())) return "";
     return getDateKey(parsedDate);
+  }
+
+  function getChecklistDateKey(dateValue?: string) {
+    return getStoredDateKey(dateValue);
   }
 
   function sidebarItemClass(isActive: boolean) {
@@ -111,6 +131,11 @@ export default function HomePage({ checklists, setChecklists }: HomePageProps) {
       title,
       message,
     });
+  }
+
+  function handleLogout() {
+    clearAuthSession();
+    navigate("/login", { replace: true });
   }
 
   // 🟢 LOAD CHECKLISTS FROM BACKEND
@@ -278,6 +303,13 @@ export default function HomePage({ checklists, setChecklists }: HomePageProps) {
     if (Number.isNaN(remindAt.getTime())) return false;
     return getDateKey(remindAt) === dashboardDateKey;
   });
+  const todayDateKey = getDateKey(today);
+  const todaysReminders = reminders.filter((reminder) => {
+    const remindAt = new Date(reminder.remind_at);
+    if (Number.isNaN(remindAt.getTime())) return false;
+    return getDateKey(remindAt) === todayDateKey;
+  });
+  const hasTodaysReminders = todaysReminders.length > 0;
   const upcomingReminders = [...dashboardReminders]
     .sort((a, b) => a.remind_at.localeCompare(b.remind_at))
     .slice(0, 4);
@@ -334,9 +366,9 @@ export default function HomePage({ checklists, setChecklists }: HomePageProps) {
       />
       <div className="flex min-h-screen bg-gradient-to-br from-pink-100 via-purple-100 to-pink-200">
       <div
-        className={`${
+        className={`sticky top-0 ${
           sidebarOpen ? "w-72 p-5" : "w-24 p-2.5"
-        } min-h-screen rounded-r-3xl border-r border-pink-100 bg-white/90 shadow-lg backdrop-blur transition-all duration-300`}
+        } flex h-screen flex-col rounded-r-3xl border-r border-pink-100 bg-white/90 shadow-lg backdrop-blur transition-all duration-300`}
       >
         <div
           className={`mb-6 flex ${
@@ -395,13 +427,47 @@ export default function HomePage({ checklists, setChecklists }: HomePageProps) {
             <span aria-hidden="true">{sidebarOpen ? "Today" : "☀"}</span>
           </button>
           <button
-            className={sidebarItemClass(activeView === "reminders")}
+            className={`${sidebarItemClass(activeView === "reminders")} ${
+              hasTodaysReminders && !sidebarOpen
+                ? "relative overflow-visible"
+                : ""
+            }`}
             onClick={() => setActiveView("reminders")}
             type="button"
             title="Reminders"
             style={{ fontFamily: "'Baloo 2', cursive" }}
           >
-            <span aria-hidden="true">{sidebarOpen ? "Reminders" : "✎"}</span>
+            <span className="flex items-center justify-between gap-2">
+              <span aria-hidden="true">{sidebarOpen ? "Reminders" : "✎"}</span>
+              {hasTodaysReminders && (
+                <span
+                  className={`${
+                    sidebarOpen
+                      ? "inline-flex items-center gap-1 rounded-full bg-pink-500 px-2 py-0.5 text-[11px] font-bold text-white shadow-sm"
+                      : "absolute -right-1 -top-1 flex h-6 w-6 items-center justify-center rounded-full bg-pink-500 text-sm text-white shadow-md"
+                  }`}
+                  aria-label="You have reminders today"
+                >
+                  <span aria-hidden="true">♥</span>
+                  {sidebarOpen && <span>Today</span>}
+                </span>
+              )}
+            </span>
+          </button>
+        </div>
+
+        <div className="mt-auto pt-6">
+          <button
+            className={`flex w-full items-center gap-3 rounded-2xl border border-pink-100 bg-pink-50 px-3 py-3 text-left text-sm font-semibold text-pink-600 transition hover:bg-pink-100 ${
+              sidebarOpen ? "" : "justify-center px-2"
+            }`}
+            onClick={handleLogout}
+            type="button"
+            title="Log out"
+            style={{ fontFamily: "'Baloo 2', cursive" }}
+          >
+            <LogOut className="h-5 w-5 shrink-0" />
+            {sidebarOpen ? <span>Log out</span> : null}
           </button>
         </div>
       </div>
@@ -411,7 +477,7 @@ export default function HomePage({ checklists, setChecklists }: HomePageProps) {
           <div className="space-y-6">
             <div className="rounded-3xl border border-pink-100 bg-white/85 p-6 shadow-md">
               <h1 className="homepage-glass-title text-3xl font-bold tracking-tight">
-                Welcome to Bubblydo
+                {greeting}
               </h1>
               <p className="mt-4 text-sm text-gray-500">
                 Organize your day, the fun way.

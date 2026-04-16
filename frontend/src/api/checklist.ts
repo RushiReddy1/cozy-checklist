@@ -1,4 +1,6 @@
-const CHECKLIST_URL = "http://localhost:8080/checklists";
+import { apiFetch } from "@/api/client";
+
+const CHECKLIST_URL = "/checklists";
 
 // TYPE
 export type Checklist = {
@@ -9,70 +11,99 @@ export type Checklist = {
 
 // GET
 export async function fetchChecklists(): Promise<Checklist[]> {
-  const res = await fetch(CHECKLIST_URL);
+  const res = await apiFetch(CHECKLIST_URL);
+
+  if (res.status === 401) {
+    localStorage.removeItem("token");
+    window.location.href = "/login";
+    throw new Error("Unauthorized");
+  }
 
   if (!res.ok) {
     throw new Error("Failed to fetch checklists");
   }
 
-  return res.json();
+  const data = (await res.json()) as Checklist[];
+  return data;
 }
 
 // GET single checklist by ID
 export async function fetchChecklistById(id: number): Promise<Checklist> {
-  const res = await fetch(`${CHECKLIST_URL}/${id}`);
+  const res = await apiFetch(`${CHECKLIST_URL}/${id}`);
+
+  if (res.status === 401) {
+    localStorage.removeItem("token");
+    window.location.href = "/login";
+    throw new Error("Unauthorized");
+  }
 
   if (!res.ok) {
     throw new Error("Failed to fetch checklist");
   }
 
-  return res.json();
+  const data = (await res.json()) as Checklist;
+  return data;
 }
 
 // POST
 export async function createChecklist(title: string): Promise<Checklist> {
-  const res = await fetch(CHECKLIST_URL, {
+  const res = await apiFetch(CHECKLIST_URL, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
     body: JSON.stringify({ title }),
   });
+
+  if (res.status === 401) {
+    localStorage.removeItem("token");
+    window.location.href = "/login";
+    throw new Error("Unauthorized");
+  }
 
   if (!res.ok) {
     throw new Error("Failed to create checklist");
   }
 
-  return res.json();
+  const data = (await res.json()) as Checklist;
+  return data;
 }
 
 export async function updateChecklistTitle(
   id: number,
   title: string,
 ): Promise<Checklist> {
-  const res = await fetch(`${CHECKLIST_URL}/${id}`, {
+  const res = await apiFetch(`${CHECKLIST_URL}/${id}`, {
     method: "PUT",
-    headers: {
-      "Content-Type": "application/json",
-    },
     body: JSON.stringify({ title }),
   });
+
+  if (res.status === 401) {
+    localStorage.removeItem("token");
+    window.location.href = "/login";
+    throw new Error("Unauthorized");
+  }
 
   if (!res.ok) {
     throw new Error("Failed to update checklist");
   }
 
-  return res.json();
+  const data = (await res.json()) as Checklist;
+  return data;
 }
 
 export async function deleteChecklist(id: number) {
-  const res = await fetch(`http://localhost:8080/checklists/${id}`, {
+  const res = await apiFetch(`${CHECKLIST_URL}/${id}`, {
     method: "DELETE",
   });
+
+  if (res.status === 401) {
+    localStorage.removeItem("token");
+    window.location.href = "/login";
+    throw new Error("Unauthorized");
+  }
 
   if (!res.ok) {
     throw new Error("Failed to delete checklist");
   }
 
-  return res.json();
+  const data = await res.json();
+  return data;
 }

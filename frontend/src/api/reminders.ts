@@ -1,4 +1,6 @@
-const REMINDER_URL = "http://localhost:8080/reminders";
+import { apiFetch } from "@/api/client";
+
+const REMINDER_URL = "/reminders";
 const LOCAL_REMINDER_STORAGE_KEY = "bubblydo-local-reminders";
 
 export type Reminder = {
@@ -31,7 +33,13 @@ function setLocalReminders(reminders: Reminder[]) {
 
 export async function fetchReminders(): Promise<Reminder[]> {
   try {
-    const res = await fetch(REMINDER_URL);
+    const res = await apiFetch(REMINDER_URL);
+
+    if (res.status === 401) {
+      localStorage.removeItem("token");
+      window.location.href = "/login";
+      throw new Error("Unauthorized");
+    }
 
     if (!res.ok) {
       throw new Error("Failed to fetch reminders");
@@ -51,13 +59,16 @@ export async function createReminder(
   remindAt: string,
 ): Promise<Reminder> {
   try {
-    const res = await fetch(REMINDER_URL, {
+    const res = await apiFetch(REMINDER_URL, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
       body: JSON.stringify({ text, remind_at: remindAt }),
     });
+
+    if (res.status === 401) {
+      localStorage.removeItem("token");
+      window.location.href = "/login";
+      throw new Error("Unauthorized");
+    }
 
     if (!res.ok) {
       throw new Error("Failed to create reminder");
@@ -83,13 +94,20 @@ export async function deleteReminder(id: number) {
     return { message: "local reminder deleted" };
   }
 
-  const res = await fetch(`${REMINDER_URL}/${id}`, {
+  const res = await apiFetch(`${REMINDER_URL}/${id}`, {
     method: "DELETE",
   });
+
+  if (res.status === 401) {
+    localStorage.removeItem("token");
+    window.location.href = "/login";
+    throw new Error("Unauthorized");
+  }
 
   if (!res.ok) {
     throw new Error("Failed to delete reminder");
   }
 
-  return res.json();
+  const data = await res.json();
+  return data;
 }

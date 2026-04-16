@@ -1,7 +1,29 @@
-import { Routes, Route } from "react-router-dom";
+import { Navigate, Routes, Route } from "react-router-dom";
 import { useState } from "react";
 import HomePage from "./pages/HomePage";
 import ChecklistPage from "./pages/ChecklistPage";
+import LoginPage from "./pages/LoginPage";
+import { isAuthenticated } from "@/lib/auth";
+
+function hasToken() {
+  return isAuthenticated();
+}
+
+function ProtectedRoute({ children }: { children: React.ReactNode }) {
+  if (!hasToken()) {
+    return <Navigate to="/login" replace />;
+  }
+
+  return <>{children}</>;
+}
+
+function PublicOnlyRoute({ children }: { children: React.ReactNode }) {
+  if (hasToken()) {
+    return <Navigate to="/" replace />;
+  }
+
+  return <>{children}</>;
+}
 
 export default function App() {
   const [checklists, setChecklists] = useState<
@@ -18,16 +40,28 @@ export default function App() {
       <Route
         path="/"
         element={
-          <HomePage checklists={checklists} setChecklists={setChecklists} />
+          <ProtectedRoute>
+            <HomePage checklists={checklists} setChecklists={setChecklists} />
+          </ProtectedRoute>
         }
       />
       <Route
         path="/checklist/:id"
         element={
-          <ChecklistPage
-            checklists={checklists}
-            setChecklists={setChecklists}
-          />
+          <ProtectedRoute>
+            <ChecklistPage
+              checklists={checklists}
+              setChecklists={setChecklists}
+            />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/login"
+        element={
+          <PublicOnlyRoute>
+            <LoginPage />
+          </PublicOnlyRoute>
         }
       />
     </Routes>
