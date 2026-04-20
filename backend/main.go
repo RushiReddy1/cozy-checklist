@@ -5,13 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"unicode"
 
 	"context"
 	"github.com/golang-jwt/jwt/v5"
-	_ "github.com/mattn/go-sqlite3"
+	_ "github.com/jackc/pgx/v5/stdlib"
 	"golang.org/x/crypto/bcrypt"
 	"time"
 )
@@ -76,10 +77,10 @@ func parseID(path, prefix string) (int, error) {
 	return strconv.Atoi(idStr)
 }
 
-func ensureUsersSchema() error {
+func ensureSchema() error {
 	_, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS users (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			id BIGSERIAL PRIMARY KEY,
 			first_name TEXT NOT NULL DEFAULT '',
 			last_name TEXT NOT NULL DEFAULT '',
 			email TEXT NOT NULL UNIQUE,
@@ -90,63 +91,58 @@ func ensureUsersSchema() error {
 		return err
 	}
 
-	for _, column := range []string{"first_name", "last_name"} {
-		exists, err := userColumnExists(column)
-		if err != nil {
-			return err
-		}
-		if exists {
-			continue
-		}
-
-		_, err = db.Exec(
-			fmt.Sprintf(
-				"ALTER TABLE users ADD COLUMN %s TEXT NOT NULL DEFAULT ''",
-				column,
-			),
-		)
-		if err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-func userColumnExists(columnName string) (bool, error) {
-	rows, err := db.Query("PRAGMA table_info(users)")
+	_, err = db.Exec(`
+		ALTER TABLE users
+		ADD COLUMN IF NOT EXISTS first_name TEXT NOT NULL DEFAULT '',
+		ADD COLUMN IF NOT EXISTS last_name TEXT NOT NULL DEFAULT ''
+	`)
 	if err != nil {
-		return false, err
+		return err
 	}
-	defer rows.Close()
 
-	for rows.Next() {
-		var (
-			cid        int
-			name       string
-			columnType string
-			notNull    int
-			defaultVal sql.NullString
-			primaryKey int
+	_, err = db.Exec(`
+		CREATE TABLE IF NOT EXISTS checklists (
+			id BIGSERIAL PRIMARY KEY,
+			title TEXT NOT NULL,
+			user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		)
-
-		if err := rows.Scan(
-			&cid,
-			&name,
-			&columnType,
-			&notNull,
-			&defaultVal,
-			&primaryKey,
-		); err != nil {
-			return false, err
-		}
-
-		if name == columnName {
-			return true, nil
-		}
+	`)
+	if err != nil {
+		return err
 	}
 
-	return false, rows.Err()
+	_, err = db.Exec(`
+		CREATE TABLE IF NOT EXISTS tasks (
+			id BIGSERIAL PRIMARY KEY,
+			text TEXT NOT NULL,
+			done BOOLEAN NOT NULL DEFAULT FALSE,
+			checklist_id BIGINT NOT NULL REFERENCES checklists(id) ON DELETE CASCADE
+		)
+	`)
+	if err != nil {
+		return err
+	}
+
+	_, err = db.Exec(`
+		CREATE TABLE IF NOT EXISTS reminders (
+			id BIGSERIAL PRIMARY KEY,
+			text TEXT NOT NULL,
+			remind_at TIMESTAMPTZ NOT NULL,
+			user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		)
+	`)
+	if err != nil {
+		return err
+	}
+
+	_, err = db.Exec(`
+		CREATE INDEX IF NOT EXISTS idx_checklists_user_id ON checklists(user_id);
+		CREATE INDEX IF NOT EXISTS idx_tasks_checklist_id ON tasks(checklist_id);
+		CREATE INDEX IF NOT EXISTS idx_reminders_user_id ON reminders(user_id);
+	`)
+	return err
 }
 
 func passwordMatchesStandard(password string) bool {
@@ -264,9 +260,15 @@ func handleTasks(w http.ResponseWriter, r *http.Request) {
 		var err error
 
 		if checklistID != "" {
+			userID := r.Context().Value("userID").(int)
 			rows, err = db.Query(
-				"SELECT id, text, done, checklist_id FROM tasks WHERE checklist_id = ? ORDER BY id",
+				`SELECT t.id, t.text, t.done, t.checklist_id
+				 FROM tasks t
+				 JOIN checklists c ON t.checklist_id = c.id
+				 WHERE t.checklist_id = $1 AND c.user_id = $2
+				 ORDER BY t.id`,
 				checklistID,
+				userID,
 			)
 		} else {
 			userID := r.Context().Value("userID").(int)
@@ -275,7 +277,7 @@ func handleTasks(w http.ResponseWriter, r *http.Request) {
 				`SELECT t.id, t.text, t.done, t.checklist_id
 				 FROM tasks t
 				 JOIN checklists c ON t.checklist_id = c.id
-				 WHERE c.user_id = ?
+				 WHERE c.user_id = $1
 				 ORDER BY t.id`,
 				userID,
 			)
@@ -318,7 +320,7 @@ func handleTasks(w http.ResponseWriter, r *http.Request) {
 		var ownerID int
 
 		err := db.QueryRow(
-			"SELECT user_id FROM checklists WHERE id = ?",
+			"SELECT user_id FROM checklists WHERE id = $1",
 			input.ChecklistID,
 		).Scan(&ownerID)
 
@@ -332,22 +334,20 @@ func handleTasks(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		result, err := db.Exec(
-			"INSERT INTO tasks (text, done, checklist_id) VALUES (?, ?, ?)",
+		var taskID int
+		err = db.QueryRow(
+			"INSERT INTO tasks (text, done, checklist_id) VALUES ($1, $2, $3) RETURNING id",
 			input.Text,
 			false,
 			input.ChecklistID,
-		)
-
+		).Scan(&taskID)
 		if err != nil {
 			writeError(w, 500, "insert failed")
 			return
 		}
 
-		id, _ := result.LastInsertId()
-
 		writeJSON(w, 201, Task{
-			ID:          int(id),
+			ID:          taskID,
 			Text:        input.Text,
 			Done:        false,
 			ChecklistID: input.ChecklistID,
@@ -372,17 +372,42 @@ func handleTaskByID(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 
 	case http.MethodPut:
-		_, err := db.Exec("UPDATE tasks SET done = NOT done WHERE id = ?", id)
+		userID := r.Context().Value("userID").(int)
+		result, err := db.Exec(
+			`UPDATE tasks t
+			 SET done = NOT t.done
+			 FROM checklists c
+			 WHERE t.checklist_id = c.id AND t.id = $1 AND c.user_id = $2`,
+			id,
+			userID,
+		)
 		if err != nil {
 			writeError(w, 500, "update failed")
+			return
+		}
+		rowsAffected, _ := result.RowsAffected()
+		if rowsAffected == 0 {
+			writeError(w, 404, "task not found")
 			return
 		}
 		writeJSON(w, 200, map[string]string{"status": "updated"})
 
 	case http.MethodDelete:
-		_, err := db.Exec("DELETE FROM tasks WHERE id = ?", id)
+		userID := r.Context().Value("userID").(int)
+		result, err := db.Exec(
+			`DELETE FROM tasks t
+			 USING checklists c
+			 WHERE t.checklist_id = c.id AND t.id = $1 AND c.user_id = $2`,
+			id,
+			userID,
+		)
 		if err != nil {
 			writeError(w, 500, "delete failed")
+			return
+		}
+		rowsAffected, _ := result.RowsAffected()
+		if rowsAffected == 0 {
+			writeError(w, 404, "task not found")
 			return
 		}
 		writeJSON(w, 200, map[string]string{"status": "deleted"})
@@ -403,7 +428,7 @@ func handleChecklists(w http.ResponseWriter, r *http.Request) {
 		userID := r.Context().Value("userID").(int)
 
 		rows, err := db.Query(
-			"SELECT id, title, created_at FROM checklists WHERE user_id = ? ORDER BY id",
+			"SELECT id, title, created_at FROM checklists WHERE user_id = $1 ORDER BY id",
 			userID,
 		)
 		if err != nil {
@@ -436,18 +461,20 @@ func handleChecklists(w http.ResponseWriter, r *http.Request) {
 
 		userID := r.Context().Value("userID").(int)
 
-		result, _ := db.Exec(
-			"INSERT INTO checklists (title, user_id) VALUES (?, ?)",
+		var checklist Checklist
+		err := db.QueryRow(
+			`INSERT INTO checklists (title, user_id)
+			 VALUES ($1, $2)
+			 RETURNING id, title, created_at`,
 			input.Title,
 			userID,
-		)
+		).Scan(&checklist.ID, &checklist.Title, &checklist.CreatedAt)
+		if err != nil {
+			writeError(w, 500, "insert failed")
+			return
+		}
 
-		id, _ := result.LastInsertId()
-
-		writeJSON(w, 201, Checklist{
-			ID:    int(id),
-			Title: input.Title,
-		})
+		writeJSON(w, 201, checklist)
 
 	default:
 		writeError(w, 405, "method not allowed")
@@ -468,24 +495,44 @@ func handleChecklistByID(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 
 	case http.MethodPut:
+		userID := r.Context().Value("userID").(int)
 		var input struct {
 			Title string `json:"title"`
 		}
 
 		json.NewDecoder(r.Body).Decode(&input)
 
-		_, err := db.Exec("UPDATE checklists SET title = ? WHERE id = ?", input.Title, id)
+		var checklist Checklist
+		err := db.QueryRow(
+			`UPDATE checklists
+			 SET title = $1
+			 WHERE id = $2 AND user_id = $3
+			 RETURNING id, title, created_at`,
+			input.Title,
+			id,
+			userID,
+		).Scan(&checklist.ID, &checklist.Title, &checklist.CreatedAt)
+		if err == sql.ErrNoRows {
+			writeError(w, 404, "checklist not found")
+			return
+		}
 		if err != nil {
 			writeError(w, 500, "update failed")
 			return
 		}
 
-		writeJSON(w, 200, map[string]string{"status": "updated"})
+		writeJSON(w, 200, checklist)
 
 	case http.MethodDelete:
-		_, err := db.Exec("DELETE FROM checklists WHERE id = ?", id)
+		userID := r.Context().Value("userID").(int)
+		result, err := db.Exec("DELETE FROM checklists WHERE id = $1 AND user_id = $2", id, userID)
 		if err != nil {
 			writeError(w, 500, "delete failed")
+			return
+		}
+		rowsAffected, _ := result.RowsAffected()
+		if rowsAffected == 0 {
+			writeError(w, 404, "checklist not found")
 			return
 		}
 
@@ -506,7 +553,15 @@ func handleReminders(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 
 		userID := r.Context().Value("userID").(int)
-		rows, _ := db.Query("SELECT id, text, remind_at FROM reminders WHERE user_id = ? ORDER BY remind_at", userID)
+		rows, err := db.Query(
+			"SELECT id, text, remind_at FROM reminders WHERE user_id = $1 ORDER BY remind_at",
+			userID,
+		)
+		if err != nil {
+			writeError(w, 500, "db error")
+			return
+		}
+		defer rows.Close()
 
 		reminders := []Reminder{}
 
@@ -527,16 +582,19 @@ func handleReminders(w http.ResponseWriter, r *http.Request) {
 		json.NewDecoder(r.Body).Decode(&input)
 		userID := r.Context().Value("userID").(int)
 
-		result, _ := db.Exec(
-			"INSERT INTO reminders (text, remind_at, user_id) VALUES (?, ?, ?)",
+		var reminderID int
+		err := db.QueryRow(
+			"INSERT INTO reminders (text, remind_at, user_id) VALUES ($1, $2, $3) RETURNING id",
 			input.Text,
 			input.RemindAt,
 			userID,
-		)
+		).Scan(&reminderID)
+		if err != nil {
+			writeError(w, 500, "insert failed")
+			return
+		}
 
-		id, _ := result.LastInsertId()
-
-		writeJSON(w, 201, map[string]int{"id": int(id)})
+		writeJSON(w, 201, map[string]int{"id": reminderID})
 
 	default:
 		writeError(w, 405, "method not allowed")
@@ -555,9 +613,15 @@ func handleReminderByID(w http.ResponseWriter, r *http.Request) {
 
 	switch r.Method {
 	case http.MethodDelete:
-		_, err := db.Exec("DELETE FROM reminders WHERE id = ?", id)
+		userID := r.Context().Value("userID").(int)
+		result, err := db.Exec("DELETE FROM reminders WHERE id = $1 AND user_id = $2", id, userID)
 		if err != nil {
 			writeError(w, 500, "delete failed")
+			return
+		}
+		rowsAffected, _ := result.RowsAffected()
+		if rowsAffected == 0 {
+			writeError(w, 404, "reminder not found")
 			return
 		}
 		writeJSON(w, 200, map[string]string{"status": "deleted"})
@@ -619,7 +683,7 @@ func handleSignup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var exists int
-	err = db.QueryRow("SELECT COUNT(*) FROM users WHERE email = ?", input.Email).Scan(&exists)
+	err = db.QueryRow("SELECT COUNT(*) FROM users WHERE email = $1", input.Email).Scan(&exists)
 	if err != nil {
 		writeError(w, 500, "database error")
 		return
@@ -629,25 +693,22 @@ func handleSignup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := db.Exec(
-		"INSERT INTO users (first_name, last_name, email, password_hash) VALUES (?, ?, ?, ?)",
+	var id int
+	err = db.QueryRow(
+		`INSERT INTO users (first_name, last_name, email, password_hash)
+		 VALUES ($1, $2, $3, $4)
+		 RETURNING id`,
 		input.FirstName,
 		input.LastName,
 		input.Email,
 		string(hashedPassword),
-	)
+	).Scan(&id)
 	if err != nil {
 		writeError(w, 500, "user creation failed")
 		return
 	}
 
-	id, err := result.LastInsertId()
-	if err != nil {
-		writeError(w, 500, "failed to get user id")
-		return
-	}
-
-	authResponse, err := buildAuthResponse(int(id), input.FirstName, input.LastName, input.Email)
+	authResponse, err := buildAuthResponse(id, input.FirstName, input.LastName, input.Email)
 	if err != nil {
 		writeError(w, 500, "token creation failed")
 		return
@@ -685,7 +746,7 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 	var storedPassword string
 
 	err = db.QueryRow(
-		"SELECT id, first_name, last_name, password_hash FROM users WHERE email = ?",
+		"SELECT id, first_name, last_name, password_hash FROM users WHERE email = $1",
 		input.Email,
 	).Scan(&userID, &firstName, &lastName, &storedPassword)
 	if err == sql.ErrNoRows {
@@ -716,12 +777,21 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 func main() {
 	var err error
 
-	db, err = sql.Open("sqlite3", "tasks.db")
+	databaseURL := strings.TrimSpace(os.Getenv("DATABASE_URL"))
+	if databaseURL == "" {
+		databaseURL = "postgres://postgres:postgres@localhost:5432/mini_todo?sslmode=disable"
+	}
+
+	db, err = sql.Open("pgx", databaseURL)
 	if err != nil {
 		panic(err)
 	}
 
-	if err := ensureUsersSchema(); err != nil {
+	if err := db.Ping(); err != nil {
+		panic(err)
+	}
+
+	if err := ensureSchema(); err != nil {
 		panic(err)
 	}
 
@@ -736,6 +806,6 @@ func main() {
 	http.HandleFunc("/signup", handleSignup)
 	http.HandleFunc("/login", handleLogin)
 
-	fmt.Println("Server running on http://localhost:8080")
+	fmt.Printf("Server running on http://localhost:8080 using %s\n", databaseURL)
 	http.ListenAndServe(":8080", nil)
 }
