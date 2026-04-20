@@ -1,5 +1,5 @@
 export async function apiFetch(url: string, options: RequestInit = {}) {
-  const BASE_URL = "http://localhost:8080";
+  const BASE_URL = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/$/, "");
   const token = localStorage.getItem("token");
   const isAuthRoute = url === "/login" || url === "/signup";
 
@@ -9,7 +9,7 @@ export async function apiFetch(url: string, options: RequestInit = {}) {
     headers.set("Authorization", `Bearer ${token}`);
   }
 
-  return fetch(BASE_URL + url, {
+  return fetch(`${BASE_URL}${url}`, {
     ...options,
     headers,
   });

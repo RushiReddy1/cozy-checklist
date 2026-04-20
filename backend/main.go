@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -18,6 +19,8 @@ import (
 )
 
 var db *sql.DB
+var jwtSecret []byte
+var allowedOrigins map[string]struct{}
 
 // ---------- STRUCTS ----------
 
@@ -54,8 +57,36 @@ type AuthResponse struct {
 
 // ---------- HELPERS ----------
 
-func enableCORS(w http.ResponseWriter) {
-	w.Header().Set("Access-Control-Allow-Origin", "*")
+func parseAllowedOrigins(raw string) map[string]struct{} {
+	origins := map[string]struct{}{}
+	for _, value := range strings.Split(raw, ",") {
+		origin := strings.TrimSpace(value)
+		if origin != "" {
+			origins[origin] = struct{}{}
+		}
+	}
+	return origins
+}
+
+func isOriginAllowed(origin string) bool {
+	if len(allowedOrigins) == 0 {
+		return false
+	}
+
+	if _, ok := allowedOrigins["*"]; ok {
+		return true
+	}
+
+	_, ok := allowedOrigins[origin]
+	return ok
+}
+
+func enableCORS(w http.ResponseWriter, r *http.Request) {
+	origin := strings.TrimSpace(r.Header.Get("Origin"))
+	if origin != "" && isOriginAllowed(origin) {
+		w.Header().Set("Access-Control-Allow-Origin", origin)
+		w.Header().Set("Vary", "Origin")
+	}
 	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 }
@@ -177,7 +208,7 @@ func buildAuthResponse(userID int, firstName, lastName, email string) (AuthRespo
 		"exp":     time.Now().Add(24 * time.Hour).Unix(),
 	})
 
-	tokenString, err := token.SignedString([]byte("secret"))
+	tokenString, err := token.SignedString(jwtSecret)
 	if err != nil {
 		return AuthResponse{}, err
 	}
@@ -204,7 +235,7 @@ func getUserID(r *http.Request) (int, error) {
 	tokenString := strings.TrimPrefix(authHeader, "Bearer ")
 
 	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
-		return []byte("secret"), nil
+		return jwtSecret, nil
 	})
 
 	if err != nil || !token.Valid {
@@ -222,14 +253,14 @@ func getUserID(r *http.Request) (int, error) {
 func AuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodOptions {
-			enableCORS(w)
+			enableCORS(w, r)
 			w.WriteHeader(http.StatusOK)
 			return
 		}
 
 		userID, err := getUserID(r)
 		if err != nil {
-			enableCORS(w)
+			enableCORS(w, r)
 			writeError(w, 401, "unauthorized")
 			return
 		}
@@ -244,7 +275,7 @@ func AuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 // ---------- TASKS ----------
 
 func handleTasks(w http.ResponseWriter, r *http.Request) {
-	enableCORS(w)
+	enableCORS(w, r)
 
 	if r.Method == http.MethodOptions {
 		w.WriteHeader(http.StatusOK)
@@ -361,7 +392,7 @@ func handleTasks(w http.ResponseWriter, r *http.Request) {
 // ---------- TASK BY ID ----------
 
 func handleTaskByID(w http.ResponseWriter, r *http.Request) {
-	enableCORS(w)
+	enableCORS(w, r)
 
 	id, err := parseID(r.URL.Path, "/tasks/")
 	if err != nil {
@@ -420,7 +451,7 @@ func handleTaskByID(w http.ResponseWriter, r *http.Request) {
 // ---------- CHECKLISTS ----------
 
 func handleChecklists(w http.ResponseWriter, r *http.Request) {
-	enableCORS(w)
+	enableCORS(w, r)
 
 	switch r.Method {
 
@@ -484,7 +515,7 @@ func handleChecklists(w http.ResponseWriter, r *http.Request) {
 // ---------- CHECKLIST BY ID ----------
 
 func handleChecklistByID(w http.ResponseWriter, r *http.Request) {
-	enableCORS(w)
+	enableCORS(w, r)
 
 	id, err := parseID(r.URL.Path, "/checklists/")
 	if err != nil {
@@ -546,7 +577,7 @@ func handleChecklistByID(w http.ResponseWriter, r *http.Request) {
 // ---------- REMINDERS ----------
 
 func handleReminders(w http.ResponseWriter, r *http.Request) {
-	enableCORS(w)
+	enableCORS(w, r)
 
 	switch r.Method {
 
@@ -603,7 +634,7 @@ func handleReminders(w http.ResponseWriter, r *http.Request) {
 
 // ---------- REMINDER BY ID ----------
 func handleReminderByID(w http.ResponseWriter, r *http.Request) {
-	enableCORS(w)
+	enableCORS(w, r)
 
 	id, err := parseID(r.URL.Path, "/reminders/")
 	if err != nil {
@@ -634,7 +665,7 @@ func handleReminderByID(w http.ResponseWriter, r *http.Request) {
 // ---------signup handler ---------
 
 func handleSignup(w http.ResponseWriter, r *http.Request) {
-	enableCORS(w)
+	enableCORS(w, r)
 	fmt.Println("Signup API hit")
 
 	if r.Method == http.MethodOptions {
@@ -719,7 +750,7 @@ func handleSignup(w http.ResponseWriter, r *http.Request) {
 
 // ---------login handler ---------
 func handleLogin(w http.ResponseWriter, r *http.Request) {
-	enableCORS(w)
+	enableCORS(w, r)
 
 	if r.Method == http.MethodOptions {
 		w.WriteHeader(http.StatusOK)
@@ -795,6 +826,25 @@ func main() {
 		panic(err)
 	}
 
+	jwtSecret = []byte(strings.TrimSpace(os.Getenv("JWT_SECRET")))
+	if len(jwtSecret) == 0 {
+		panic("JWT_SECRET must be set")
+	}
+
+	allowedOrigins = parseAllowedOrigins(os.Getenv("CORS_ALLOWED_ORIGINS"))
+	if len(allowedOrigins) == 0 {
+		frontendURL := strings.TrimSpace(os.Getenv("FRONTEND_URL"))
+		if frontendURL != "" {
+			if parsed, parseErr := url.Parse(frontendURL); parseErr == nil && parsed.Scheme != "" && parsed.Host != "" {
+				allowedOrigins[fmt.Sprintf("%s://%s", parsed.Scheme, parsed.Host)] = struct{}{}
+			}
+		}
+	}
+
+	if len(allowedOrigins) == 0 {
+		allowedOrigins["http://localhost:5173"] = struct{}{}
+	}
+
 	http.HandleFunc("/tasks", AuthMiddleware(handleTasks))
 	http.HandleFunc("/tasks/", AuthMiddleware(handleTaskByID))
 
@@ -805,7 +855,16 @@ func main() {
 	http.HandleFunc("/reminders/", AuthMiddleware(handleReminderByID))
 	http.HandleFunc("/signup", handleSignup)
 	http.HandleFunc("/login", handleLogin)
+	http.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		enableCORS(w, r)
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	})
 
-	fmt.Printf("Server running on http://localhost:8080 using %s\n", databaseURL)
-	http.ListenAndServe(":8080", nil)
+	port := strings.TrimSpace(os.Getenv("PORT"))
+	if port == "" {
+		port = "8080"
+	}
+
+	fmt.Printf("Server running on http://localhost:%s using %s\n", port, databaseURL)
+	http.ListenAndServe(":"+port, nil)
 }

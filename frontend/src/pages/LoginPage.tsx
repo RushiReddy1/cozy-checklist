@@ -43,15 +43,21 @@ export default function LoginPage() {
       passed: /[^A-Za-z0-9]/.test(password),
     },
   ];
-
+  // This function checks if the password meets the defined standard.
   function passwordMatchesStandard(value: string) {
     const hasUppercase = /[A-Z]/.test(value);
     const hasLowercase = /[a-z]/.test(value);
     const hasNumber = /\d/.test(value);
     const hasSpecial = /[^A-Za-z0-9]/.test(value);
-    return value.length >= 8 && hasUppercase && hasLowercase && hasNumber && hasSpecial;
+    return (
+      value.length >= 8 &&
+      hasUppercase &&
+      hasLowercase &&
+      hasNumber &&
+      hasSpecial
+    );
   }
-
+  // This function tries to extract a user-friendly error message from the API response.
   async function getApiErrorMessage(res: Response, currentMode: AuthMode) {
     try {
       const data = (await res.json()) as { error?: string };
@@ -88,7 +94,10 @@ export default function LoginPage() {
 
     if (
       mode === "signup" &&
-      (!firstName.trim() || !lastName.trim() || !email.trim() || !password.trim())
+      (!firstName.trim() ||
+        !lastName.trim() ||
+        !email.trim() ||
+        !password.trim())
     ) {
       setError("Please fill in first name, last name, email, and password.");
       return;
@@ -186,8 +195,8 @@ export default function LoginPage() {
                   Daily flow
                 </p>
                 <p className="mt-3 max-w-sm text-base leading-7 text-white/88">
-                  Create a list, check things off, and come back whenever you are
-                  ready to keep going.
+                  Create a list, check things off, and come back whenever you
+                  are ready to keep going.
                 </p>
               </div>
             </div>
@@ -332,7 +341,9 @@ export default function LoginPage() {
                       type="button"
                       onClick={() => setShowPassword((current) => !current)}
                       className="absolute inset-y-0 right-3 flex items-center text-slate-400 transition hover:text-slate-700"
-                      aria-label={showPassword ? "Hide password" : "Show password"}
+                      aria-label={
+                        showPassword ? "Hide password" : "Show password"
+                      }
                     >
                       {showPassword ? (
                         <EyeOff className="h-5 w-5" />
@@ -351,7 +362,9 @@ export default function LoginPage() {
                           <div
                             key={check.label}
                             className={`flex items-center gap-2 text-sm ${
-                              check.passed ? "text-emerald-600" : "text-slate-500"
+                              check.passed
+                                ? "text-emerald-600"
+                                : "text-slate-500"
                             }`}
                           >
                             {check.passed ? (
