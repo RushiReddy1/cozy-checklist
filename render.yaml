@@ -2,6 +2,7 @@ services:
   - type: web
     name: mini-todo-api
     runtime: go
+    plan: free
     rootDir: backend
     buildCommand: go build -o app .
     startCommand: ./app
@@ -20,6 +21,7 @@ services:
   - type: web
     name: mini-todo-frontend
     runtime: static
+    plan: free
     rootDir: frontend
     buildCommand: npm ci && npm run build
     staticPublishPath: dist
@@ -33,3 +35,4 @@ services:
 
 databases:
   - name: mini-todo-db
+    plan: free
